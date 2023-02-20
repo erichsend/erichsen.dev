@@ -1,0 +1,84 @@
+---
+title: Initial Commit
+description: "Creating the erichsen.dev static site"
+pubDate: 2023-02-19 22:19
+---
+
+In the past I have struggled with side projects, especially in rapidly changing areas of technology. Not so much in starting them, but in keeping them up to date, and remembering the lessons learned.
+
+To better set myself up to learn and experiment with software, I started building a platform to host all of my experimentation.
+
+While setting up that project, I realized I did not have a great place to keep my notes. Giving it some thought, I realized I needed to keep more than the state of my source code and infrastructure up to date, but I also needed to organize and archive my work over time.
+
+I chose a simple journal format that is much more about ensuring my experiments and lessons are properly recorded, rather than a guide or article format.
+
+### Goal
+
+I had a few requirements:
+- Hosted on a CDN indpendently of `api.erichsen.dev`
+- Built with a static site generator
+- All content in Markdown for easy migration to another site generator framework if needed.
+
+### Bootstrapping the Journal
+
+After looking through the landscape, I decided to give [Astro](https://github.com/withastro/astro) a try. After all, with my content in Markdown, I'm not to worried about revisiting this decision later.
+
+I chose the smallest starter I could find that met my needs, choosing [NoFuss](https://github.com/lancerossdev/nofuss/tree/main/src) due to its markdown-driven content and use of tailwindcss, and not much else.
+
+### Customizing
+
+The NoFuss starter, small as it was, still had more than what I needed (or was ready to understand).
+
+I already had my first two markdown files written, so my refactoring went along these lines:
+
+**Adds**
+- Add an 'About' mdx page -- this included changing `astro.config.tx` to find the new page, and turning `BlogLayout.astro` into the generic `MdxLayout.astro`
+- Add a generic banner and favicon from open-source icons and images
+
+**Changes**
+- Change all the mountain icons to laptop-2 since it fits the content better
+- Rename Blog->Journal
+- Change every instance of NoFuss and the author, [Lance Ross](https://github.com/lancerossdev/) (but thanks for the starter bud!)
+
+**Removes**
+- Remove all images (this is why this first commit has no images folder. It will come back when I have an image to add.)
+- Remove the counter and homepage dummy content (similar to the images folder this also removes the entire content folder for now)
+- Delete the original landing page and have the journal page to be the new landing page
+
+### Deploying
+
+After [committing](https://github.com/erichsend/erichsen.dev/commit/c51750c12db060d43a0679846b9524be8dc766c9) my initial project to the `erichsen.dev` repository, I manually deployed it to AWS Amplify with the AWS web console by connecting it to my Git repo and using the auto-detected build settings:
+```
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm install
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: /dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+```
+
+I had to use `npm` to build as the amplify builder doesn't have `pnpm` but that is not a problem.
+
+I also set up my domain root to point at this new deployment. Since Amazon's Route 53 was already managing the `erichsen.dev` hosted zone, it was presented as an option. It was a nice surprise that AWS added the required A record and CNAME to facilitate redirection, and utilized the new records to validate my ownership of the domain.
+
+With the site deploying, and my domain properly redirecting to the amplify deployment with proper TLS verification, my last step was to remove the dummy entry file I added (including from commit history) to bootstrap the deployment, and commit this entry!
+
+### What is next?
+
+As I wrap this up I think I can add a few candidates for future projects:
+- In the past I used cloudfront pointing to an s3 bucket to host a static site. If for any reason I do not like Amplify I can make a github action to deploy the s3/cloudfront way. I don't really need the featureset of Amplify. I also don't really like leaving GHA to check on something in the AWS console.
+- My far more experienced UI colleagues have recommended I look into [Nuxt](https://nuxtjs.org/)
+
+
+---
+
