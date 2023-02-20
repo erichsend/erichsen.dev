@@ -1,0 +1,85 @@
+---
+title: Bootstrapping an API Platform
+description: "Using ArgoCD and Konnect for GitOps-driven Application Hosting Platform"
+pubDate: 2023-02-20 11:19
+---
+
+### The Goal
+
+- Be able to surface API's to the internet at `api.erichsen.dev`
+- Host services on Kubernetes
+- Nearly 100% automation with GitOps
+- Production-like (or maybe production-lite is a better phrase)
+- Cheap to run
+
+### The setup
+
+- Kubernetes will be Linode Kubernetes Engine - it's cheap and uncomplicated.
+- Linode also offers automation for adding block storage for persistent volume claims, and creating load balancers for that service type
+- ArgoCD will manage my GitOps requirements
+
+#### Setting up the cluster
+
+I requested a new cluster via their console. Linode is offering a $100 credit over 2 months, so I want to stay close to $50/month.
+
+```
+2 Shared CPU Linode 4GB nodes @ $20/node/month
+2 planned Load Balancers @ $10/month (one for kong hybrid, one for kic)
+2 Planned 10GB Storage Volumes @ $1/month
+
+Estimated Cost: $62/month
+```
+
+I will be sure I can spin these up/down easily before my $100 credit runs out.
+
+Next I attached firewalls to the kubernetes nodes. I followed the advice offered in [this support answer from linode](https://www.linode.com/community/questions/19155/securing-k8s-cluster) and applied the following rules:
+
+```
+TCP port 10250 from 192.168.128.0/17 Accept, Kubelet health checks
+UDP port 51820 from 192.168.128.0/17 Accept, Wireguard tunneling for kubectl proxy
+TCP port 179 from 192.168.128.0/17 Accept, Calico BGP traffic
+TCP/UDP port 30000 - 32767 192.168.128.0/17 Accept, NodePorts for workload Services
+TCP All Ports All IPv4/All IPv6 Drop, Block all other TCP traffic
+UDP All Ports All IPv4/All IPv6 Drop, Block all other UDP traffic
+ICMP All Ports All IPv4/All IPv6 Drop, Block all ICMP traffic
+```
+
+#### Setting up ArgoCD
+
+I want to have all of my apps and charts in a single repository, including overrides to 3rd party charts. Therefore, I chose the 'app of apps' pattern using ArgoCD. This pattern as well as other useful information about setting up ArgoCD can be found [on this padok.fr post](https://www.padok.fr/en/blog/kubernetes-cluster-gitops).
+
+The 'App of Apps' is an argo application that points to a directory of kubternetes resources, which also happen to be ArgoCD Application CRDs.
+
+It will work like this:
+- Create an "api.erichsen.dev" repository with an `argocd/apps` folder to contain Application definitions
+- Add an app called 'argocd apps' to the `argocd/apps` directory, with its source definition pointing to the same repo and directory
+  ```
+    source:
+      path: argocd/apps/
+      repoURL: 'https://github.com/erichsend/api.erichsen.dev'
+  ```
+- Manually Install ArgoCD on the cluster (using `core` mode to save resources)
+```
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
+```
+
+- Manually apply the 'App of Apps' application to the cluster's `argocd` namespace
+
+The app definition was committed [here](https://github.com/erichsend/api.erichsen.dev/commit/9b58be2d7218bf65263d687adbffb8ad1acefa14).
+
+#### Wrapping Up
+
+To access argo in 'core' mode I installed the argocd cli and ran `argocd login --core ` while having my kube context and namespace set to the argocd namespace of the linode k8s cluster.
+
+I started up the argocd dashboard and could see the `argocd-apps` application was healthy.
+
+As a test, I push a new application to the `argocd-apps` directory of my source repository, and see it appear in ArgoCD. I then removed the commit from the repository.
+
+### Next Steps
+- Add Kong proxy in hybrid mode using Konnect for a Control Plane
+- Add a KIC and replicate the konnect-defined routes as native k8s ingresses
+- Automate DNS and Certificate management
+
+---
+
