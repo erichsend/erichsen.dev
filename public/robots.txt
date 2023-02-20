@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://erichsen.dev/sitemap-index.xml
