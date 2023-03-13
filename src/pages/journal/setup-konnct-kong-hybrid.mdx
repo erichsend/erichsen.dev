@@ -1,7 +1,46 @@
 ---
 title: Adding a Kong Gateway with Konnect
 description: "Setting up an API Gateway powered by Kong and managed in Konnect"
-pubDate: 2023-02-19 22:43
+pubDate: 2023-02-22 17:51
 ---
+
+### Goal
+
+- Deploy a Kong gateway as an ArgoCD Application from the Kong helm charts
+- Host and manage the gateway configuration in Konnect
+- Access the gateway proxy service via `api.erichsen.dev`
+
+### Deploying
+
+I'll do this in several steps:
+- Get required information from Konnect
+- Build the konnect-kong application in the cluster
+- Deploy the gateway
+- Set up DNS and HTTPS
+
+#### Gathering Konnect Information
+
+- Logging into my account at cloud.konghq.com I go to Runtime Manager and select my default runtime group
+- The runtime instance list is empty so I click "create new runtime instance"
+- On the next page I select the tile for Kubernetes instructions
+
+The script that is generated automatically created a keypair for my dp-cp communication and uploaded the public key to Konnect.
+
+I copy the cert information and the generated helm values into 3 files for the nest step:
+- `tls.crt` containing my public key that was also pinned in Konnect
+- `tls.key` containing my private key that Konnect does not have
+- `values.yaml` containing runtime group information required by the dataplanes to reach konnect
+
+##### Building the Konnect-Kong Application
+
+
+
+#### Deploying the Gateway
+
+
+#### Configuring DNS and HTTPS
+
+### Next Steps
+
 ---
 
