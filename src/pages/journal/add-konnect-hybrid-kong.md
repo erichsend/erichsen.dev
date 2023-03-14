@@ -1,0 +1,193 @@
+---
+title: Adding a Kong Gateway with Konnect
+description: "Setting up an API Gateway powered by Kong and managed in Konnect"
+pubDate: 2023-02-22 17:51
+---
+
+### Goal
+
+- Deploy a Kong gateway as an ArgoCD Application from the Kong helm charts
+- Host and manage the gateway configuration in Konnect
+- Access the gateway proxy service via `api.erichsen.dev`
+
+### Deploying
+
+I'll do this in several steps:
+- Get required information from Konnect
+- Build the konnect-kong application in the cluster
+- Deploy the gateway
+- Set up DNS and HTTPS
+
+#### Gathering Konnect Information
+
+- Logging into my account at cloud.konghq.com I go to Runtime Manager and select my default runtime group
+- The runtime instance list is empty so I click "create new runtime instance"
+- On the next page I select the tile for Kubernetes instructions
+
+The script that is generated automatically created a keypair for my dp-cp communication and uploaded the public key to Konnect.
+
+I copy the cert information and the generated helm values into 3 files for the next step:
+- `tls.crt` containing my public key that was also pinned in Konnect
+- `tls.key` containing my private key that Konnect does not have
+- `values.yaml` containing runtime group information required by the dataplanes to reach konnect
+
+#### Building the Konnect-Kong Source Chart
+
+The Argo App for the Konnect Hybrid Gateways will require a 'source directory' containing a helm chart.
+Since this application is simply providing overrides to the Kong chart, I only need to define a Chart using the kong chart as a dependency, and the necessary values overrides.
+
+In this repository, each 'application source' chart directory will be a peer of the `argocd`. Therefore I add a `konnect-kong` directory at the repository root, and add a Chart.yaml at the root of that directory with the following contents:
+
+
+```
+apiVersion: v2
+name: kong
+version: 2.16.5
+appVersion: 3.1.0
+description: Kong gateway chart
+sources:
+  - https://github.com/kong/kong
+type: application
+dependencies:
+  - name: kong
+    version: 2.16.5
+    repository: https://charts.konghq.com
+```
+
+
+Next, I add a values.yaml to the `konnect-kong` directory, next to the Chart.yaml
+
+**Important Note** 
+The values for the `kong` chart must be nested to match the sub-chart name in the helm chart dependencies. In this example, all overrides for the chart are scoped under `kong`. This pattern goes for all dependency overrides of any sub-chart in this repository.
+```
+kong:
+  image:
+    repository: kong/kong-gateway
+    tag: "3.1.1.3"
+
+  secretVolumes:
+  - kong-cluster-cert
+
+  admin:
+    enabled: false
+
+  env:
+    role: data_plane
+    database: "off"
+    cluster_mtls: pki
+    cluster_control_plane: 79f296a65d.us.cp0.konghq.com:443
+    cluster_server_name: 79f296a65d.us.cp0.konghq.com
+    cluster_telemetry_endpoint: 79f296a65d.us.tp0.konghq.com:443
+    cluster_telemetry_server_name: 79f296a65d.us.tp0.konghq.com
+    cluster_cert: /etc/secrets/kong-cluster-cert/tls.crt
+    cluster_cert_key: /etc/secrets/kong-cluster-cert/tls.key
+    lua_ssl_trusted_certificate: system
+    konnect_mode: "on"
+    vitals: "off"
+
+  ingressController:
+    enabled: false
+    installCRDs: false
+
+  replicaCount: 2
+```
+
+The important things to note here are:
+- The admin api and ingress controller are both inactive
+- certificates will be mounted from a secret names `kong-cluster-cert`
+- dp/tp endpoints are pointing to Konnect control plane and telemetry endpoints
+
+
+With the chart and values defined, it is time to validate. This begins with adding the dependencies locally:
+```
+cd konnect-kong
+
+helm repo add kong https://charts.konghq.com
+helm repo update
+helm dep update
+```
+Finally, helm template can verify the computed manifest, and grep can assist with sanity-checking the values interpolation.
+```
+# Verify template
+helm template --dry-run . -f values.yaml | grep konghq
+
+          value: "79f296a65d.us.cp0.konghq.com:443"
+          value: "79f296a65d.us.cp0.konghq.com"
+          value: "79f296a65d.us.tp0.konghq.com:443"
+          value: "79f296a65d.us.tp0.konghq.com"
+          value: "79f296a65d.us.cp0.konghq.com:443"
+          value: "79f296a65d.us.cp0.konghq.com"
+          value: "79f296a65d.us.tp0.konghq.com:443"
+          value: "79f296a65d.us.tp0.konghq.com"
+
+```
+#### Adding the Konnect-Kong Argo Application
+
+The `konnect-kong` 'source directory' containing the helm chart and overrides in the form of a values file is complete, so it is time to add an Application definition to the `argocd/apps` directory.
+
+The file `argocd/apps/konnect-kong.yaml` differs in some respect to the 'app of apps' itself. Apart from changes around the name, path, and namespace properties, it also uses the 'helm' strategy for the source definition, indicating ArgoCD should use `helm template` with the indicated values files to compute the manifest to be applied.
+```
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: konnect-kong
+spec:
+  project: default
+  source:
+    path: konnect-kong/
+    repoURL: 'https://github.com/erichsend/api.erichsen.dev'
+    targetRevision: HEAD
+    helm:
+      valueFiles:
+      - values.yaml
+  destination:
+    namespace: konect-kong
+    name: in-cluster
+  syncPolicy:
+    syncOptions:
+    - CreateNamespace=true
+```
+
+#### Final Dependencies and Deploying the Gateway
+
+I plan to use rate limiting and the acme plugin, so I will immediately require redis. Therefore I added another chart and app for redis. I may refactor this into a single app later but for now it's nice practice to create another app.
+
+The final commit containing all files for the konnect-kong and redis deployments can be seen [here](https://github.com/erichsend/api.erichsen.dev/commit/87cc6c049508ccb7fa7846139296cb51a7511e65).
+
+Once this commit was pushed to `main`, the ArgoCD App of Apps indicated it was out of sync. I synced the `argocd-apps` application, causing the `konnect-kong` application to appear in ArgoCD.
+
+I opened the `konnect-kong` app and verified the proposed resources looked correct, using the App Diff feature of ArgoCD.
+
+Before hitting Sync, I added the `konnect-kong` namespace and the `kong-cluster-cert` secret containing the `tls.key` and `tls.crt` values retrieved from Konnect.
+
+Finally, I hit sync and verified with the `kong-proxy` service logs and the Konnect UI that my kubernetes-hosted datplanes were indeed talking to the Konnect-hosted control plane.
+
+### Wrapping Up
+
+Thanks to the magic of cloud providers, the `LoadBalancer` kubternetes service type of the Kong Proxy service causes Linode to create an external Load Balancer for me, granting a public static IP address and forwarding ports 80 and 443 to the correct `NodePort` on the kubernetes cluster to reach the http and https ports of the kong proxy service.
+
+This means I have a dedicated way to bring traffic to my api gateway on standard protocol ports. This also means I can `curl` the Load Balancer IP address to check if my gateway is healthy:
+```
+curl "https://139.144.255.234" -k
+{"message":"no Route matched with those values"}%
+```
+
+Since I have no routes or services setup, this is perfectly normal. 
+
+The last things I complete are manual steps I am automating later, so I'm not going into detail, but they are:
+
+- SSL Setup: Already had manually retrieved a certificate for `api.erichsen.dev` from zerossl. I uplodaded it to konnect as a certificate and added an SNI for `api.erichsen.dev` linked to that certificate.
+- DNS Setup: Apart from the verification CNAME record required to get the zerossl certificate, I also added an A Record in my Route 53 hosted zone for `api.erichsen.dev` to point to the IP address of the Linode Load Balancer fronting my Kong Proxy kubernetes service.
+
+Once complete, I can run the following command without connection or TLS issues:
+```
+curl "https://api.erichsen.dev"
+{"message":"no Route matched with those values"}%
+```
+
+### Next Steps
+- Automate Certificate and DNS configuration
+- Setup a KIC proxy in parallel with the kong hybrid deployment
+
+---
+
