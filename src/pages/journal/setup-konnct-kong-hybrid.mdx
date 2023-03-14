@@ -33,6 +33,92 @@ I copy the cert information and the generated helm values into 3 files for the n
 
 ##### Building the Konnect-Kong Application
 
+The first step is to add a 'wrapper' chart to live in the charts/apps repository. 
+
+In this repository, each ''application source' chart directory will be a peer of the `argocd`. Therefore I add a `konnect-kong` directory at the repository root, and add a Chart.yaml at the root of that directory with the following contents:
+
+
+```
+apiVersion: v2
+name: kong
+version: 2.16.5
+appVersion: 3.1.0
+description: Kong gateway chart
+sources:
+  - https://github.com/kong/kong
+type: application
+dependencies:
+  - name: kong
+    version: 2.16.5
+    repository: https://charts.konghq.com
+```
+
+
+Next, I add a values.yaml to the `konnect-kong` directory, next to the Chart.yaml
+
+**Important Note** 
+The values for the `kong` chart must be nested to match the dependency name in the helm chart dependencies. In this example, all overrides for the chart are scoped under `kong`. This pattern goes for all dependency overrides of any sub-chart in this repository.
+```
+
+kong:
+  image:
+    repository: kong/kong-gateway
+    tag: "3.1.1.3"
+
+  secretVolumes:
+  - kong-cluster-cert
+
+  admin:
+    enabled: false
+
+  env:
+    role: data_plane
+    database: "off"
+    cluster_mtls: pki
+    cluster_control_plane: 79f296a65d.us.cp0.konghq.com:443
+    cluster_server_name: 79f296a65d.us.cp0.konghq.com
+    cluster_telemetry_endpoint: 79f296a65d.us.tp0.konghq.com:443
+    cluster_telemetry_server_name: 79f296a65d.us.tp0.konghq.com
+    cluster_cert: /etc/secrets/kong-cluster-cert/tls.crt
+    cluster_cert_key: /etc/secrets/kong-cluster-cert/tls.key
+    lua_ssl_trusted_certificate: system
+    konnect_mode: "on"
+    vitals: "off"
+
+  ingressController:
+    enabled: false
+    installCRDs: false
+
+  replicaCount: 2
+```
+
+
+This should finish the helm configuration.
+
+Validating the chart begins by adding the dependencies locally:
+```
+cd konnect-kong
+
+helm repo add kong https://charts.konghq.com
+helm repo update
+helm dep update
+```
+Finally, helm template can verify the computed manifest, and grep can assist with sanity-checking the values interpolation.
+```
+# Verify template
+helm template --dry-run . -f values.yaml | grep konghq
+
+          value: "79f296a65d.us.cp0.konghq.com:443"
+          value: "79f296a65d.us.cp0.konghq.com"
+          value: "79f296a65d.us.tp0.konghq.com:443"
+          value: "79f296a65d.us.tp0.konghq.com"
+          value: "79f296a65d.us.cp0.konghq.com:443"
+          value: "79f296a65d.us.cp0.konghq.com"
+          value: "79f296a65d.us.tp0.konghq.com:443"
+          value: "79f296a65d.us.tp0.konghq.com"
+
+```
+
 
 
 #### Deploying the Gateway
