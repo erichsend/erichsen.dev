@@ -1,7 +1,7 @@
 ---
 title: Bootstrapping an API Platform
 description: "Using ArgoCD and Konnect for GitOps-driven Application Hosting Platform"
-pubDate: 2023-02-19 22:43
+pubDate: 2023-02-20 11:19
 ---
 
 ### The Goal
@@ -58,16 +58,25 @@ It will work like this:
       path: argocd/apps/
       repoURL: 'https://github.com/erichsend/api.erichsen.dev'
   ```
-- Manually Install ArgoCD on the cluster (usining minimal mode to save resources)
-- Manually apply the 'App of Apps' application to the cluster
+- Manually Install ArgoCD on the cluster (using `core` mode to save resources)
+```
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
+```
+
+- Manually apply the 'App of Apps' application to the cluster's `argocd` namespace
+
+The app definition was committed [here](https://github.com/erichsend/api.erichsen.dev/commit/9b58be2d7218bf65263d687adbffb8ad1acefa14).
 
 #### Wrapping Up
 
-I started up the argocd dashboard using the cli utility since I'm not running the ui in the cluster.
+To access argo in 'core' mode I installed the argocd cli and ran `argocd login --core ` while having my kube context and namespace set to the argocd namespace of the linode k8s cluster.
+
+I started up the argocd dashboard and could see the `argocd-apps` application was healthy.
 
 As a test, I push a new application to the `argocd-apps` directory of my source repository, and see it appear in ArgoCD. I then removed the commit from the repository.
 
-# Next Steps
+### Next Steps
 - Add Kong proxy in hybrid mode using Konnect for a Control Plane
 - Add a KIC and replicate the konnect-defined routes as native k8s ingresses
 - Automate DNS and Certificate management
