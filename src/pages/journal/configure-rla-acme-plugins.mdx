@@ -1,0 +1,117 @@
+---
+title: Configure Rate Limiting and Certificate Management
+description: "Use Konnect to configure Rate Limiting Advanced and ACME Plugins"
+pubDate: 2023-02-25 19:14
+---
+
+### Goal
+
+- Certificates for `api.erichsen.dev` should be automatically generated and renewed
+- Requests should be rate limited to 100 per ip address per minute
+
+
+### Steps
+
+Certificate automation will be handled by the Kong Acme Plugin and ZeroSSL.
+
+Rate limiting will be handled by Rate Limiting Advance Plugin.
+
+Both plugins will use Redis as a cache, acme for certificates and rate limiting advanced will store counters for ips.
+
+Later I will add a DecK file and automated syncing, but for now, I'm configuring plugins on the Konnect UI.
+
+#### Rate Limiting
+
+The Rate Limiting Advanced plugin is straightforward. I will define a rate, a caching mechanism, and a way to differentiate callers.
+
+For my current purposes, the rate will be low, the cache will be redis, and the differentiator will be client IP address.
+
+I go to the Plugins menu item in Runtime Manager for my production Runtime Group, and add the Rate Limiting Advanced plugin.
+
+I leave all the config to the defaults except the following:
+```
+Config.Identifer: ip
+Config.Limit: 100
+Config.Redis.Database: 1
+Config.Redis.Host: konnect-kong-redis-master
+Config.Redis.Port: 6379 # This should have defaulted
+Config.Redis.Password: <password from redis secret>
+Config.Strategy: redis
+Config.Sync Rate: 5
+Config.Window Size: 60
+```
+
+##### Testing
+
+There is not a ton of feedback that things are working. I don't see any log messages from the data planes indicating issue connecting to redis, which are normally quite easy to see.
+
+I'm also getting the expected Rate Limiting response headers now when I cURL a test route/service I have set up.
+```
+< x-ratelimit-limit-minute: 100
+< x-ratelimit-remaining-minute: 94
+< ratelimit-limit: 100
+< ratelimit-remaining: 94
+< ratelimit-reset: 22
+```
+
+#### ACME Plugin
+
+The ACME plugin is similarly straightforward, but takes a little more setup.
+
+##### Prerequisites
+
+Regardless of provider, the ACME protocol requires us to define a route on the gateway to receive ACME requests and prove domain ownership.
+
+I added a Route called `well-known-acme-challenge` with the following config:
+```
+Protocol: http/https
+Paths: /.well-known/acme-challenge
+```
+
+This route was pointed to a 'dummy' gateway service with a fake upstream, as it is never meant to be called.
+
+The next step was the Authentication for the Certificate Vendor.
+
+For ZeroSSL to work with Kong's Acme Plugin, I needed to login to my ZeroSSL account and create an External Account Binding (EAB) to get the credentials required to configure the plugin.
+
+
+With the ZeroSSL EAB credentials and the ACME verification route ready, I was ready to configure the plugin.
+
+##### Configuration
+
+I was able to largely leave the fields empty or in their default value, setting the following fields:
+
+```
+Config.Account Email: <my zerossl email>
+Config.Allow Any Domain: true
+Config.Api Uri: https://acme.zerossl.com/v2/DV90
+Config.Eab Hmac Key: <from zerossl>
+Config.Eab Kid: <from zerossl>
+Config.Storage: redis
+Config.Storage Config.Redis.Auth: <redis token>
+Config.Storage Config.Redis.Host: konnect-kong-redis-master
+Config.Storage Config.Redis.Port: 6379 # Should have defaulted
+```
+
+
+Since I figured out redis connectivity with the Rate Limiting Plugin, there were no issues with the values for this plugin's redis connection.
+
+
+##### Testing
+
+The ACME plugin is a little easier to test.  
+
+While watching gateway logs, I made a call to `api.erichsen.dev` which routed to the gateway. For this call, as expected, I did not receive a valid certificate for the domain.
+
+Moments later, I saw the logs show a call to the `/.well-known/acme-challenge` route, and my gateway was able to complete the certificate order and load in the signed cert from ZeroSSL.
+
+To test Redis/Caching, I restarted both dataplanes and confirmed the certificate was already available from the cache.
+
+No more adding `-k` to my test cURL calls!
+
+### Next Steps
+- Setup a KIC proxy in parallel with the kong hybrid deployment
+- Automate DNS
+
+---
+
