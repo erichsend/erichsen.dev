@@ -1,0 +1,154 @@
+
+---
+title: Adding the Kubernetes Ingress Controller for Kong
+description: "Deploying a second proxy to the cluster"
+pubDate: 2023-03-11 10:44
+---
+
+Even though my Konnect/Kong proxy service will cover all of my needs, I do want to try running all of Kong's infrastructure products. Therefore I will be deploying the Kubernetes Ingress Controller for Kong, aka KIC.
+
+### The Goal
+
+- Add Kong's Kubernetes Ingress Controller (KIC) to my Kubernetes cluster
+- Configure a service with a KIC ingress and ensure it can be accessed on kic.erichsen.dev
+- Test upcoming KIC/Konnect features
+- Run alongside the konnect hybrid kong deployment already in place and be able to proxy to the same services
+
+### Deploying
+
+I wanted to get a 'plain' KIC deployment working before adding the experimental konnect syncing.
+
+Since the Konnect integration uses a new feature in version 2.9 of the Ingress Controller called Gateway Discovery, I will need to deploy the controller and proxy services separately.
+
+From the [docs](https://github.com/Kong/charts/blob/73a763e8eb5360f35de166c42a72db96541ea9cc/charts/kong/README.md#the-gatewaydiscovery-section):
+```
+Using this feature requires a split release installation of Gateways and Ingress Controller.
+```
+
+Therefore I'll start by simply adding a new chart directory and separate argo app for each, and look to refactor/DRY it out later.
+
+The commit that adds these charts and applications can be seen [here](https://github.com/erichsend/api.erichsen.dev/commit/8889d1171ece25f662e99917cc8c9703a4419fd9)
+
+
+#### An Updated Kong Chart
+
+Since I'm using experimental features, I need to use a release-candidate chart.
+
+For both the controller and dps, I'm starting with this dependency:
+```
+dependencies:
+  - name: kong
+    version: 2.17.0-rc.4
+    repository: https://charts.konghq.com
+```
+
+#### The Dataplanes App
+
+In Gateway Discovery mode, the Ingress Controller will 'discover' the Admin API of deployed kong proxy instances via a kubernetes service name. The controller will then use the discovered Admin API to configure the dataplane instances using the defined Ingresses and other CRDs.
+
+To support this, the Kong chart for the Dataplane-only deployment should be overridden with the following options:
+- Admin API Service enabled with a ClusterIP type to reach the Admin API service from within the cluster
+- Ingress Controller disabled
+
+Which only requires a minimal values file:
+```
+kong:
+  admin:
+    enabled: true
+    type: ClusterIP
+    clusterIP: None
+
+  image:
+    repository: kong/kong-gateway
+    tag: "3.2"
+
+  ingressController:
+    enabled: false
+
+  replicaCount: 3
+```
+
+At this point I put this values.yaml in a `konnect-kic-dps` directory with the Chart.yaml, added an Argo application definition at `argocd/apps/konnect-kic-dps.yaml`, and applied it to my cluster.
+
+I was left with a service comprised of 3 pods runnning the kong gateway, but without any configuration. There is a `konnect-kic-dps-kong-proxy` service, as well as a `konnect-kic-dps-kong-admin` service.
+
+I am able to port-forward and hit the proxy service endpoint, but there are no services or routes yet.
+
+The next step is to set up the Ingress Controller to supply this information.
+
+#### The Controller App
+
+This application will run the Ingress Controller and supporting resources. It will not run any proxies however and therefore the `kong` deployment in the chart must be disabled. Instead, it will be configured with the `konnect-kic-dps-kong-proxy` proxy service created in the last step, and that service will handle the actual proxying.
+
+The controller also needs to be able to find the `konnect-kic-dps-kong-admin` Admin service in the cluster using the Gateway Discovery feature, and then apply the configuration to that AdminAPI.
+
+With all of these requirements we end up with these options for the chart:
+```
+kong:
+  deployment:
+    kong:
+      enabled: false
+
+  proxy:
+    nameOverride: konnect-kic-dps-kong-proxy
+
+  ingressController:
+    enabled: true
+    image:
+      repository: kong/kubernetes-ingress-controller
+      tag:  "2.9.0-rc.1"
+      effectiveSemver: "2.9.0"
+
+    gatewayDiscovery:
+      enabled: true
+      adminApiService:
+        name: konnect-kic-dps-kong-admin
+```
+
+Following the same process as I did with the `konnect-kic-dps` setup, I added a chart directory and ArgoCD application for `konnect-kic-controller`. After syncing to the cluster I see the Ingress Controller printing these logs at startup:
+```
+level=info msg="reconciling EndpointSlice" logger=controllers.KongAdminAPIService name=konnect-kic-dps-kong-admin-rw4nz namespace=konnect-kic
+level=info msg="created KIC node" hostname=konnect-kic/konnect-kic-controller-kong-7fd856c58c-pbsxp logger=setup.konnect-node node_id=78fcaef4-cbc5-4ea0-b91b-78a6ad99facb runtime_group_id=3578a240-3f58-46cb-bce1-aa60715f344a
+level=info msg="successfully synced configuration to kong" kong_url="https://10.2.0.56:8444"
+level=info msg="successfully synced configuration to kong" kong_url="https://10.2.1.113:8444"
+level=info msg="successfully synced configuration to kong" kong_url="https://10.2.1.131:8444"
+```
+
+This indicates the Controller successfully found the 3 dataplanes and configured them with the AdminAPI exposed by each.
+
+#### Konnect syncing
+
+The experimental konnect syncing support was [added](https://github.com/Kong/charts/commit/4d53c5e680a8d398276f00c384e6c5953f8eafbb) just recently, so I want to be sure I can help test that feature. As such I am including some additional data for the ingress controller to resolve how to communicated with konnect.
+
+First I have to add a secret to hold the `tls.crt` and `tls.key` pair and ensure the `tls.crt` public key is a valid certificate in Konnect for the runtime group:
+`kubectl create secret tls konnect-client-tls -n konnect-kic --cert=tls.crt --key=tls.key`
+
+Next, I have to add to the `konnect-kic/values.yaml` file:
+```
+kong:
+  ...
+  ingressController:
+  ...
+    konnect:
+        enabled: true
+        tlsClientSecretName: konnect-client-tls
+        runtimeGroupID: "3578a240-3f58-46cb-bce1-aa60715f344a"
+        apiHostname: "us.kic.api.konghq.com"
+```
+
+Since this is still in development and could change, I won't go into it. But it worked!
+
+
+### Wrapping Up
+
+The Gateway Discovery and separate installations threw me at first, but now that I see it in action I understand the benefit of separating the concerns.
+
+I chose not to actually add a service to proxy traffic to at this point, as I'm happy to stop with all of the various KIC pieces working well with one another and Konnect.
+
+### Next Steps
+- Deploy a simple service to proxy traffic to
+- Refactor the konnect charts into a single chart
+- Automate DNS and Certificate management
+
+---
+
