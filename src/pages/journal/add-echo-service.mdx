@@ -1,0 +1,111 @@
+---
+title: Deploying the Echo Service behind Kong Proxies
+description: "A simple service used for testing gateway configuration"
+pubDate: 2023-03-18 8:43
+---
+
+To recap the current state:
+- ArgoCD can automatically render and apply helm charts based on Application definitions in github
+- A Konnect Runtime Group is managing configuration for a Kong proxy service deployed to the cluster and available at api.erichsen.dev
+- A Kong Ingress Controller for Kubernetes is managing another Kong proxy service available at `kic.erichsen.dev`, and reporting its configuration to Konnect
+
+What is missing is a service to begin proxying traffic to. 
+
+Since some of the plugins I would like to eventually use will transform the request in the gateway, it will be useful to have a simple 'echo' service to see what exactly the upstream service received from the gateway.
+
+### The Goal
+
+- Deploy a new 'echo' service with a new custom chart and Application definition
+- Configure the service to be reachable on both the Konnect hybrid kong and kic deployments
+
+### Deploying
+
+The image to deploy will be the Echo Server from `gcr.io/kubernetes-e2e-test-images/echoserver`.
+
+I'll be starting a new helm chart for this just to document the process. In the future, the Echo Server image could be replaced with an image that I build, and the chart should be very similar to the one I'm building now.
+
+The commit containing the new chart and application can be found [here](https://github.com/erichsend/api.erichsen.dev/commit/9edc95ff03579c854ac786ec6d47c13c718fb364u).
+
+#### Creating the Helm Chart
+
+In my `api.erichsen.dev` repository root, I start a new helm project:
+
+```
+helm create echo-service
+```
+
+This leaves me with the default helm project structure and files:
+
+```
+echo-service/
+  Chart.yaml
+  values.yaml
+  templates/
+    NOTES.txt
+    _helpers.tpl
+    deployment.yaml
+    hpa.yaml
+    ingress.yaml
+    service.yaml
+    serviceaccount.yaml
+    tests
+    tests/
+      test-connection.yaml
+  charts/
+```
+
+From here it was a matter of mostly removing what I didn't plan to use, and updating the values file.
+
+##### Deletes
+- Deleted `echo-service/templates/NOTES.txt` to tidy up
+- Deleted hpa.yaml - I do not plan to worry about autoscaling this service
+- Deleted serviceaccount.yaml - I do not plan to use a serviceaccount for now
+
+##### Changes
+- Removed many unused keys from the values file, including imagePullSecrets, serviceAccount, podSecurityContext, securityContext, resources, and autoscaling
+- Removed all parts of `deployment.yaml` correlating to the properties removed from values.yaml
+- Updated the image repository to `repository: gcr.io/kubernetes-e2e-test-images/echoserver`, and removed the tag to default to the chart AppVersion
+- Changed the ingress section of values.yaml to include the following ingress values
+```
+ingress:
+  enabled: true
+  className: "kong"
+  annotations:
+    konghq.com/strip-path: 'true'
+  hosts:
+    - host: kic.erichsen.dev
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls:
+    - secretName: kic-erichsen-dev-tls
+      hosts:
+        - kic.erichsen.dev
+```
+
+With these changes, I have a minimal helm chart that will run the echo server on a single replica available on the path `/` for the host header of `kic.erichsen.dev`.
+
+Additionally, since I have not set up the acme plugin for kic yet, I am supplying a server cert for `kic.erichsem.dev` as a manually-applied secret.
+
+
+#### Deploying the Application
+
+Since ArgoCD Applications are so similar, I just copy an existing app and change the path and application name.
+
+Once all of these changes were committed, I was able to sync the `argo-apps` Application to detect the new `echo-service` Application. Syncing `echo-service` was successful as well.
+
+Since I had previously pointed `kic.erichsen.dev` to the KIC proxy service LoadBalancer external IP, I could immediately `curl https://kic.erichsen.dev` to see the output of the service, with TLS working thanks to the manually applied certificate. 
+
+### Wrapping Up
+
+To complete the task, I manually created a gateway service and route in Konnect and confirmed I could access the echo service at `api.erichsem.dev` as well. It's becoming clear that I need to change my konnect configuration to DecK before long.
+
+With this service in place, I can experiment with a number of Kong plugins and see the result of any applied request or response changes,
+
+### Next Steps
+- Refactor the konnect charts into a single chart
+- Automate DNS management for both gateway deployments
+- Automate certificate management for `kic.erichsen.dev`
+
+---
+
