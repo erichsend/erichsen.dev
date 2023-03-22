@@ -18,6 +18,8 @@ I'll do this in several steps:
 - Deploy the gateway
 - Set up DNS and HTTPS
 
+The commit relating to this entry is [here](https://github.com/erichsend/api.erichsen.dev/commit/b920ad859bcad4597243f55224b7490d14a70e18)
+
 #### Gathering Konnect Information
 
 - Logging into my account at cloud.konghq.com I go to Runtime Manager and select my default runtime group
@@ -151,8 +153,6 @@ spec:
 #### Final Dependencies and Deploying the Gateway
 
 I plan to use rate limiting and the acme plugin, so I will immediately require redis. Therefore I added another chart and app for redis. I may refactor this into a single app later but for now it's nice practice to create another app.
-
-The final commit containing all files for the konnect-kong and redis deployments can be seen [here](https://github.com/erichsend/api.erichsen.dev/commit/87cc6c049508ccb7fa7846139296cb51a7511e65).
 
 Once this commit was pushed to `main`, the ArgoCD App of Apps indicated it was out of sync. I synced the `argocd-apps` application, causing the `konnect-kong` application to appear in ArgoCD.
 
