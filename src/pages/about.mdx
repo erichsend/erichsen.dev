@@ -9,8 +9,14 @@ My name is [David Erichsen](https://www.linkedin.com/in/erichsend), and I'm curr
 
 The domain `erichsen.dev` exists for me to build and prototype things that I'm interested in, typically because it is tangential to something we're building on the Konnect SaaS.
 
-Today, the domain consists of two parts
-- `erichsen.dev` is this statically generated UI used to host my development journal
-- `api.erichsen.dev` is a kubernetes-hosted API platform powered by Kong's Konnect SaaS product and running a multitude of experiments.
+Today, the domain consists of two parts.
 
+#### Journal
+This site, `erichsen.dev` is a statically generated UI used to host my development journal.
 
+#### API platform
+
+A kubernetes-hosted API platform powered by Kong's Konnect SaaS product. There are currently two endpoints connected to proxies managed by Kong products, but the intention is to keep them functionally the same to ensure I can achieve parity across products regardless of configuration method.
+
+- `api.erichsen.dev` is a 'traditional' hybrid deployment of Kong, with the Data Planes hosted by me and the Control Plane hosted in Konnect.
+- `kic.erichsen.dev` is fronted with Kong's Ingress Controller for Kubernetes (KIC) and integrated with Konnect for visualization, analytics, and other cloud features.
