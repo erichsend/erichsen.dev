@@ -1,0 +1,116 @@
+---
+title: Combining the Kong Charts
+description: "Refactoring the source chart directories for the Hybrid and KIC Kong deployments"
+pubDate: 2023-03-23 7:31
+---
+
+### The Goal
+
+- All Kong Applications in ArgoCD should use the same source directory and chart
+- The values files in the combined Kong directory should configure the type of Kong deployment
+- The standalone Redis app should be moved into the Kong directory as a dependency
+
+[Here is the commit](https://github.com/erichsend/api.erichsen.dev/commit/48371d764342fdd155e3a267942ddb05882cbad0) for these changes.
+
+### Refactoring
+
+After deploying Kong Hybrid and KIC for Konnect, I ended up with three separate directories that could be combined into one: `konnect-kic-dps`, `konnect-kic-controller`, and `konnect-kong`.
+
+Redis was contained in its own directory and deployed as a separate ArgoCD app as well.
+
+#### Combining Kong Charts
+
+The KIC deploys both used the same version of the Kong chart, which is a new release candidate. The `konnect-kong` deploy used an older version.
+
+Therefore, the first thing I did was rename one of the KIC directories and charts, from `konnect-kic-dps` to the generic `konnect-kong-proxies`. This directory will serve as the basis for the generic Kong chart.
+
+To deploy three different applications from the single directory, I then needed to bring the values files over from the `konnect-kong` and `konnnect-kic-controller` directories, as well as rename the `values.yaml` in the newly renamed `konnect-kong-proxies` to indicate it is for the KIC dataplane deploy:
+
+```
+konnect-kong/values.yaml → konnect-kong-proxies/values-hybrid-dps.yaml
+konnect-kic-controller/values.yaml → ...t-kong-proxies/values-kic-controller.yaml
+konnect-kic-dps/values.yaml → konnect-kong-proxies/values-kic-dps.yaml
+```
+
+Last, each of the Argo applications needed to be updated with a new path and values filename, for example, these changed were applied to the Konnect KIC Controller deployment:
+```
+  spec:
+    project: default
+    source:
+-     path: konnect-kic-controller/
++     path: konnect-kong-proxies/
+      repoURL: 'https://github.com/erichsend/api.erichsen.dev'
+      targetRevision: HEAD
+      helm:
+        valueFiles:
+-       - values.yaml
++       - values-kic-controller.yaml
+    destination:
+      namespace: konnect-kic
+      name: in-cluster
+```
+
+#### Moving Redis to a Deployment Dependency
+
+Since my Redis deployment source was already in the form of a 'wrapper' chart, this was an easy switch.
+
+First, I moved the dependency in the `redis/Chart.yaml` to the `konnect-kong-proxies/Chart.yaml` dependencies
+
+```
+  dependencies:
+    - name: kong
+      version: 2.17.0-rc.4
+      repository: https://charts.konghq.com
++   - name: redis
++     version: 17.7.5
++     repository: https://charts.bitnami.com/bitnami
++     condition: dependencies.redis.enabled
+```
+
+I want the redis clusters to be supporting the dataplanes, so I moved the `redis` block of values from `redis/values.yaml` and applied them to both the `values-hybrid-dps.yaml` and `values-kic-dps.yaml`. I also enabled the dependency explicitly in the values files.
+
+Example additions:
+```
++ dependencies:
++   redis:
++     enabled: true
+
+  kong:
+    admin:
+  ... # kong chart config follows
+ 
++ redis:
++   architecture: standalone
++   auth:
++     passwordSecret: "redis-password"
++   resources:
++     requests:
++       memory: "64Mi"
++       cpu: "50m"
++     limits:
++       memory: "128Mi"
++       cpu: "100m"
++ 
+```
+
+At this point I was able to delete the entire `redis` directory and the standalone application definition at `argocd/apps/redis.yaml`.
+
+### Wrapping Up
+
+Once [the commit](https://github.com/erichsend/api.erichsen.dev/commit/4ff2724c82158129284dc64b89f9e773e051d7e5) was checked in, I 'deployed' in the following order:
+
+- Synced the `konnect-kong-hybrid-dps` application. It synced and added its Redis dependency but otherwise had no changes, which was expected.
+- Synced the `konnect-kic-dps` application. It too added its redis dependency and then had no other changes.
+- Synced the `konnect-kic-controller` application. It worked as expected in that it had no actual new or updated resources.
+- Deleted the Redis application
+- Updated the Redis hostname (due to namespace change) and authentication token (due to the new redis applications generating their own new tokens) for Rate Limiting Advanced and ACME plugins for the `konnect-kong-hybrid-dps` aka api.erichsen.dev deployment
+
+
+### Next Steps
+
+- Automate DNS management with ExternalDNS
+- Automate secret management with ExternalSecrets
+- Automate cluster setup with Terraform
+
+---
+
