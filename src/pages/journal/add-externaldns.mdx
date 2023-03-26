@@ -1,0 +1,169 @@
+---
+title: Automating DNS Management for Proxy-Backed URLs
+description: "Using ExternalDNS and dns zone delegation to automatically maintain DNS records"
+pubDate: 2023-03-26 7:44
+---
+
+### The Goal
+
+- Be able to automatically assign a subdomain under `erichsen.dev` to any LoadBalancers deployed in kubernetes with External IPs.
+
+The commit that I'll be describing below can be found [here](https://github.com/erichsend/api.erichsen.dev/commit/7b2ab727c30b48c83c36045829dd94829cdeba5e)
+
+### Deployment
+
+First I'll go into the current state of DNS management, followed by the setup of ExternalDNS, and ending with the delegation of subdomains to Linode for management.
+
+#### Beginning State
+
+Both the Hybrid Kong and KIC deployments surface a LoadBalancer type service that triggers Linode to provision a Load Balancer and assign an external IP address with proper port mapping allowing the service to be accessed on the standard `443` port for HTTPS when using the ExternalIPs of these LoadBalancers.
+
+This is great, but since DNS is not automatically managed, it means every time the LoadBalancers are re-deployed (admittedly not often), a new ExternalIP is assigned aand I need to manually go to AWS Route53 and manually re-set the `A Record` for `kic.erichsen.dev` or `api.erichsen.dev` depending on which changed.
+
+ExternalDNS will allow me to assign a DNS name via annotations directly to the Kong `proxy` services, meaning no more manual updates when the ExternalIP changes for a LoadBalancer.
+
+#### Setting Up ExternalDNS
+
+I begin with the familiar process of creating a directory to hold the source files for the ArgoCD Application that will manage the ExternalDNS deployment.
+
+```
+mkdir external-dns
+touch external-dns/Chart.yaml
+touch external-dns/values.yaml
+```
+
+In `external-dns/Chart.yaml` I add the ExternalDNS dependency and pin the versions to the App Version of the ExternalDNS Chart
+```
+apiVersion: v2
+name: external-dns
+version: 6.14.3
+appVersion: 0.13.3
+description: external-dns
+sources:
+  - https://github.com/bitnami/charts
+type: application
+dependencies:
+  - name: external-dns
+    version: 6.14.3
+    repository: https://charts.bitnami.com/bitnami
+```
+
+With the dependency defined I can now have helm download the external-dns chart to confirm it is declared correctly:
+```
+❯ cd external-dns && helm dep update
+...
+Saving 1 charts
+Downloading external-dns from repo https://charts.bitnami.com/bitnami
+```
+
+Now I just need to add my values overrides in `external-dns/values.yaml`. Thankfully I am using Linode which, for better or worse, doesn't have much to configure, unlike, say, the AWS Route53 provider.
+```
+external-dns:
+  provider: linode
+  linode:
+    secretName: linode-api-key
+```
+
+I also at this point manually generated a Linode API key, created a new namespace for `external-dns`, and added the API key to a `linode-api-key` secret in the `external-dns` namespace.
+
+```
+TOKEN=<linode-api-key>
+❯ kubectl create namespace external-dns
+namespace/external-dns created
+
+❯ k create secret generic linode-api-key -n external-dns --from-literal=linode_api_token=$TOKEN
+secret/linode-api-key created
+```
+
+Last, I created the new Argo App definition, which again is pretty boilerplate and can be seen [here](https://github.com/erichsend/api.erichsen.dev/commit/7b2ab727c30b48c83c36045829dd94829cdeba5e#diff-9d0ac0a2b3101e9bae02dc498c42cf4a484db4562dc937243cb150044b490b3eR1-R19)
+
+#### Consuming ExternalDNS in Kong Proxy Deployments
+
+With the ExternalDNS operator ready to be deployed as an ArgoCD Application, I just need to provide the proper annotations to the LoadBalancer Services fronting the Hybrid Kong and KIC dataplanes.
+
+Since the `proxy` service defined in the Kong helm chart is used for the dataplanes in both the KIC and Hybrid deployments, both deployments are configured the same way: by adding the ExternalDNS annotations to the `proxy` overrides in the `konnect-kic-dps.yaml` and `konnect-hybrid-dps.yaml`.
+
+e.g. in `konnect-hybrid-dps.yaml`:
+```
+  proxy:
+    annotations:
+      external-dns.alpha.kubernetes.io/hostname: api.erichsen.dev
+```
+
+#### Testing the ExternalDNS Operator
+
+Once all of the above configuration was complete, I [committed](https://github.com/erichsend/api.erichsen.dev/commit/7b2ab727c30b48c83c36045829dd94829cdeba5e) the change and refreshed/synced the ArgoCD 'app of apps' to pick up the new `external-dns` application, and then synced that new application followed by the `konnect-hybrid-dps` and `konnect-kic-dps` applications.
+
+Everything from the cluster/ArgoCD perspective was healthy, and I confirmed that ExternalDNS did it's job by having a look with the linode cli.
+
+```
+❯ linode-cli domains list
+┌─────────┬──────────────────┬────────┬────────┬────────────────────┐
+│ id      │ domain           │ type   │ status │ soa_email          │
+├─────────┼──────────────────┼────────┼────────┼────────────────────┤
+│ 1972754 │ api.erichsen.dev │ master │ active │ admin@erichsen.dev │
+│ 1976237 │ kic.erichsen.dev │ master │ active │ admin@erichsen.dev │
+└─────────┴──────────────────┴────────┴────────┴────────────────────┘
+
+❯ linode-cli domains records-list 1972754
+┌──────────┬──────┬──────┬─────────────────────────────────────────────────────────────────────┬─────────┬──────────┬────────┐
+│ id       │ type │ name │ target                                                              │ ttl_sec │ priority │ weight │
+├──────────┼──────┼──────┼─────────────────────────────────────────────────────────────────────┼─────────┼──────────┼────────┤
+│ 23288880 │ A    │      │ 139.144.255.29                                                      │ 0       │ 0        │ 1      │
+│ 23288881 │ TXT  │      │ "heritage=external-dns,external-dns/owner=default,external-dns/r... │ 0       │ 0        │ 1      │
+└──────────┴──────┴──────┴─────────────────────────────────────────────────────────────────────┴─────────┴──────────┴────────┘
+```
+
+#### Delegating from Route53 to Linode Domains
+
+Even though Linode's Name Servers have the records now, they are not yet authoritative. That is because `erichsen.dev` is fully delegated to Route53 and there is not yet any further delegation of subdomains.
+
+So now for hopefully the last time, I go to Route53 to make a manual records update to records pertaining to `api.erichsen.dev` and `kic.erichsen.dev`.
+
+- Delete the existing `A Record` for each of the two subdomains
+- Add a new NS Record for each subdomain. Each NS Record is identical:
+  ```
+  ns1.linode.com
+  ns2.linode.com
+  ns3.linode.com
+  ns4.linode.com
+  ns5.linode.com
+  ```
+
+That's it! Now anyone querying for `api.erichsen.dev` and `kic.erichsen.dev` will be getting the results that ExternalDNS has configured in Linodes' Domain Name Servers.
+
+### Wrapping Up
+
+After waiting for DNS propagation to take place, I run a `dig` and see we are now using linode Name Servers which themselves hold records pointing to the ExternalIPs of the linode LoadBalancers. The A Record points to the LB external IP address, and the TXT record indicates it's being managed by ExternalDNS.
+
+```
+> dig api.erichsen.dev [TXT|NS|SOA]
+
+...
+
+api.erichsen.dev.       21600   IN      A       139.144.255.29
+api.erichsen.dev.       21600   IN      TXT     "\"heritage=external-dns,external-dns/owner=default,external-dns/resource=service/konnect-kong/konnect-kong-kong-proxy\""
+api.erichsen.dev.       21600   IN      NS      ns1.linode.com.
+api.erichsen.dev.       21600   IN      NS      ns5.linode.com.
+api.erichsen.dev.       21600   IN      NS      ns3.linode.com.
+api.erichsen.dev.       21600   IN      NS      ns2.linode.com.
+api.erichsen.dev.       21600   IN      NS      ns4.linode.com.
+api.erichsen.dev.       21600   IN      SOA     ns1.linode.com. admin.erichsen.dev. 2021000012 14400 14400 1209600 86400
+```
+
+And last but certainly not least, I confirmed that the APIs still work:
+
+```
+❯ curl -s -o /dev/null -w "%{http_code}\n" "https://api.erichsen.dev"
+200
+❯ curl -s -o /dev/null -w "%{http_code}\n" "https://kic.erichsen.dev"
+200
+```
+
+### Next Steps
+
+- Automate secret management with ExternalSecrets
+- Automate cluster setup with Terraform
+
+---
+
