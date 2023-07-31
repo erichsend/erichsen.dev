@@ -4,7 +4,7 @@ description: "Refactoring the source chart directories for the Hybrid and KIC Ko
 pubDate: 2023-03-23 7:31
 ---
 
-### The Goal
+## The Goal
 
 - All Kong Applications in ArgoCD should use the same source directory and chart
 - The values files in the combined Kong directory should configure the type of Kong deployment
@@ -12,13 +12,13 @@ pubDate: 2023-03-23 7:31
 
 [Here is the commit](https://github.com/erichsend/api.erichsen.dev/commit/48371d764342fdd155e3a267942ddb05882cbad0) for these changes.
 
-### Refactoring
+## Implementation
 
 After deploying Kong Hybrid and KIC for Konnect, I ended up with three separate directories that could be combined into one: `konnect-kic-dps`, `konnect-kic-controller`, and `konnect-kong`.
 
 Redis was contained in its own directory and deployed as a separate ArgoCD app as well.
 
-#### Combining Kong Charts
+### Combining Kong Charts
 
 The KIC deploys both used the same version of the Kong chart, which is a new release candidate. The `konnect-kong` deploy used an older version.
 
@@ -50,7 +50,7 @@ Last, each of the Argo applications needed to be updated with a new path and val
       name: in-cluster
 ```
 
-#### Moving Redis to a Deployment Dependency
+### Moving Redis to a Deployment Dependency
 
 Since my Redis deployment source was already in the form of a 'wrapper' chart, this was an easy switch.
 
@@ -95,7 +95,7 @@ Example additions:
 
 At this point I was able to delete the entire `redis` directory and the standalone application definition at `argocd/apps/redis.yaml`.
 
-### Wrapping Up
+## Wrapping Up
 
 Once [the commit](https://github.com/erichsend/api.erichsen.dev/commit/4ff2724c82158129284dc64b89f9e773e051d7e5) was checked in, I 'deployed' in the following order:
 
@@ -106,7 +106,7 @@ Once [the commit](https://github.com/erichsend/api.erichsen.dev/commit/4ff2724c8
 - Updated the Redis hostname (due to namespace change) and authentication token (due to the new redis applications generating their own new tokens) for Rate Limiting Advanced and ACME plugins for the `konnect-kong-hybrid-dps` aka api.erichsen.dev deployment
 
 
-### Next Steps
+## Next Steps
 
 - Automate DNS management with ExternalDNS
 - Automate secret management with ExternalSecrets

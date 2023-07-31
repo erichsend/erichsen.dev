@@ -6,14 +6,14 @@ pubDate: 2023-03-11 10:44
 
 Even though my Konnect/Kong proxy service will cover all of my needs, I do want to try running all of Kong's infrastructure products. Therefore I will be deploying the Kubernetes Ingress Controller for Kong, aka KIC.
 
-### The Goal
+## The Goal
 
 - Add Kong's Kubernetes Ingress Controller (KIC) to my Kubernetes cluster
 - Configure a service with a KIC ingress and ensure it can be accessed on kic.erichsen.dev
 - Test upcoming KIC/Konnect features
 - Run alongside the konnect hybrid kong deployment already in place and be able to proxy to the same services
 
-### Deploying
+## Implementation
 
 I wanted to get a 'plain' KIC deployment working before adding the experimental konnect syncing.
 
@@ -29,7 +29,7 @@ Therefore I'll start by simply adding a new chart directory and separate argo ap
 The commit that adds these charts and applications can be seen [here](https://github.com/erichsend/api.erichsen.dev/commit/24ed3f5dde7484fd621a661d06a22c70c685bd59)
 
 
-#### An Updated Kong Chart
+### An Updated Kong Chart
 
 Since I'm using experimental features, I need to use a release-candidate chart.
 
@@ -41,7 +41,7 @@ dependencies:
     repository: https://charts.konghq.com
 ```
 
-#### The Dataplanes App
+### The Dataplanes App
 
 In Gateway Discovery mode, the Ingress Controller will 'discover' the Admin API of deployed kong proxy instances via a kubernetes service name. The controller will then use the discovered Admin API to configure the dataplane instances using the defined Ingresses and other CRDs.
 
@@ -75,7 +75,7 @@ I am able to port-forward and hit the proxy service endpoint, but there are no s
 
 The next step is to set up the Ingress Controller to supply this information.
 
-#### The Controller App
+### The Controller App
 
 This application will run the Ingress Controller and supporting resources. It will not run any proxies however and therefore the `kong` deployment in the chart must be disabled. Instead, it will be configured with the `konnect-kic-dps-kong-proxy` proxy service created in the last step, and that service will handle the actual proxying.
 
@@ -115,7 +115,7 @@ level=info msg="successfully synced configuration to kong" kong_url="https://10.
 
 This indicates the Controller successfully found the 3 dataplanes and configured them with the AdminAPI exposed by each.
 
-#### Konnect syncing
+### Konnect syncing
 
 The experimental konnect syncing support was [added](https://github.com/Kong/charts/commit/4d53c5e680a8d398276f00c384e6c5953f8eafbb) just recently, so I want to be sure I can help test that feature. As such I am including some additional data for the ingress controller to resolve how to communicated with konnect.
 
@@ -137,7 +137,7 @@ kong:
 
 Since this is still in development and could change, I won't go into it. But it worked!
 
-### Wrapping Up
+## Wrapping Up
 
 The Gateway Discovery and separate installations threw me at first, but now that I see it in action I understand the benefit of separating the concerns.
 
@@ -145,7 +145,7 @@ I chose not to actually add a service to proxy traffic to at this point, as I'm 
 
 Finally, I manually created an `A Record` in Route53 to resolve `kic.erichsen.dev` to the ExternalIp of the LoadBalancer for the Ingress Controller service.
 
-### Next Steps
+## Next Steps
 - Deploy a simple service to proxy traffic to
 - Refactor the konnect charts into a single chart
 - Automate DNS and Certificate management

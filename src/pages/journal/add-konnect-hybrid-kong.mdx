@@ -4,13 +4,13 @@ description: "Setting up an API Gateway powered by Kong and managed in Konnect"
 pubDate: 2023-02-22 17:51
 ---
 
-### Goal
+## The Goal
 
 - Deploy a Kong gateway as an ArgoCD Application from the Kong helm charts
 - Host and manage the gateway configuration in Konnect
 - Access the gateway proxy service via `api.erichsen.dev`
 
-### Deploying
+## Implementation
 
 I'll do this in several steps:
 - Get required information from Konnect
@@ -20,7 +20,7 @@ I'll do this in several steps:
 
 The commit relating to this entry is [here](https://github.com/erichsend/api.erichsen.dev/commit/b920ad859bcad4597243f55224b7490d14a70e18)
 
-#### Gathering Konnect Information
+### Gathering Konnect Information
 
 - Logging into my account at cloud.konghq.com I go to Runtime Manager and select my default runtime group
 - The runtime instance list is empty so I click "create new runtime instance"
@@ -33,7 +33,7 @@ I copy the cert information and the generated helm values into 3 files for the n
 - `tls.key` containing my private key that Konnect does not have
 - `values.yaml` containing runtime group information required by the dataplanes to reach konnect
 
-#### Building the Konnect-Kong Source Chart
+### Building the Konnect-Kong Source Chart
 
 The Argo App for the Konnect Hybrid Gateways will require a 'source directory' containing a helm chart.
 Since this application is simply providing overrides to the Kong chart, I only need to define a Chart using the kong chart as a dependency, and the necessary values overrides.
@@ -123,7 +123,7 @@ helm template --dry-run . -f values.yaml | grep konghq
           value: "79f296a65d.us.tp0.konghq.com"
 
 ```
-#### Adding the Konnect-Kong Argo Application
+### Adding the Konnect-Kong Argo Application
 
 The `konnect-kong` 'source directory' containing the helm chart and overrides in the form of a values file is complete, so it is time to add an Application definition to the `argocd/apps` directory.
 
@@ -150,7 +150,7 @@ spec:
     - CreateNamespace=true
 ```
 
-#### Final Dependencies and Deploying the Gateway
+### Final Dependencies and Deploying the Gateway
 
 I plan to use rate limiting and the acme plugin, so I will immediately require redis. Therefore I added another chart and app for redis. I may refactor this into a single app later but for now it's nice practice to create another app.
 
@@ -162,7 +162,7 @@ Before hitting Sync, I added the `konnect-kong` namespace and the `kong-cluster-
 
 Finally, I hit sync and verified with the `kong-proxy` service logs and the Konnect UI that my kubernetes-hosted datplanes were indeed talking to the Konnect-hosted control plane.
 
-### Wrapping Up
+## Wrapping Up
 
 Thanks to the magic of cloud providers, the `LoadBalancer` kubternetes service type of the Kong Proxy service causes Linode to create an external Load Balancer for me, granting a public static IP address and forwarding ports 80 and 443 to the correct `NodePort` on the kubernetes cluster to reach the http and https ports of the kong proxy service.
 
@@ -185,7 +185,7 @@ curl "https://api.erichsen.dev"
 {"message":"no Route matched with those values"}%
 ```
 
-### Next Steps
+## Next Steps
 - Automate Certificate and DNS configuration
 - Setup a KIC proxy in parallel with the kong hybrid deployment
 

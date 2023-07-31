@@ -8,13 +8,13 @@ Rate limiting is important to keep my meager cluster humming along, and ACME is 
 
 Since I do not yet have a CI/CD pipeline for gateway config changes, all of this work will take place in the Konnect UI.
 
-### Goal
+## The Goal
 
 - Certificates for `api.erichsen.dev` should be automatically generated and renewed
 - Requests should be rate limited to 100 per ip address per minute
 
 
-### Steps
+## Implementation
 
 Certificate automation will be handled by the Kong Acme Plugin and ZeroSSL.
 
@@ -24,7 +24,7 @@ Both plugins will use Redis as a cache, acme for certificates and rate limiting 
 
 Later I will add a DecK file and automated syncing, but for now, I'm configuring plugins on the Konnect UI.
 
-#### Rate Limiting
+### Rate Limiting
 
 The Rate Limiting Advanced plugin is straightforward. I will define a rate, a caching mechanism, and a way to differentiate callers.
 
@@ -45,7 +45,7 @@ Config.Sync Rate: 5
 Config.Window Size: 60
 ```
 
-##### Testing
+#### Testing
 
 There is not a ton of feedback that things are working. I don't see any log messages from the data planes indicating issue connecting to redis, which are normally quite easy to see.
 
@@ -58,11 +58,11 @@ I'm also getting the expected Rate Limiting response headers now when I cURL a t
 < ratelimit-reset: 22
 ```
 
-#### ACME Plugin
+### ACME Plugin
 
 The ACME plugin is similarly straightforward, but takes a little more setup.
 
-##### Prerequisites
+#### Prerequisites
 
 Regardless of provider, the ACME protocol requires us to define a route on the gateway to receive ACME requests and prove domain ownership.
 
@@ -81,7 +81,7 @@ For ZeroSSL to work with Kong's Acme Plugin, I needed to login to my ZeroSSL acc
 
 With the ZeroSSL EAB credentials and the ACME verification route ready, I was ready to configure the plugin.
 
-##### Configuration
+#### Configuration
 
 I was able to largely leave the fields empty or in their default value, setting the following fields:
 
@@ -101,7 +101,7 @@ Config.Storage Config.Redis.Port: 6379 # Should have defaulted
 Since I figured out redis connectivity with the Rate Limiting Plugin, there were no issues with the values for this plugin's redis connection.
 
 
-##### Testing
+#### Testing
 
 The ACME plugin is a little easier to test.  
 
@@ -113,7 +113,7 @@ To test Redis/Caching, I restarted both dataplanes and confirmed the certificate
 
 No more adding `-k` to my test cURL calls!
 
-### Next Steps
+## Next Steps
 - Automating DNS alongside ACME would make thins extremely hands-off
 - DecK Config should be stored in git and applied automatically on push
 
