@@ -1,0 +1,184 @@
+---
+title: Managing Certificates for KIC Ingresses with ACME Plugin
+description: "Setting up certificate automation using Kong's ACME Plugin"
+pubDate: 2023-08-12 1:29
+---
+
+## The Goal
+
+- The ACME plugin for Kong should manage certificates for all Kong Ingresses
+- The plugin configuration should direct the data planes to retrieve sensitive plugin information from the `env` vault built into Kong.
+
+
+## Implementation
+
+[Here is the commit](https://github.com/erichsend/api.erichsen.dev/commit/6dbcb31e148ff4ce233f6a67b5d7a6ab616ee389) for these changes. I'll go through the important parts part below.
+
+
+### Creating ZeroSSL Credentials as Kubernetes Secrets from AWS
+
+Since I was  planning on moving ACME secrets to AWS, I already created the required entries in Parameter Store when I originally [setup external secrets](https://www.erichsen.dev/journal/add-external-secrets).
+
+
+They are found under the keys:
+```
+/zerossl/eab_hmac_key
+/zerossl/eab_kid
+```
+
+Therefore, I simply needed to add these new secrets to the helm chart.
+
+I added a new file `/konnect-kong-proxies/templates/zerossl-es.yaml` and defined a secret for each of the stored parameters:
+```
+{{- if .Values.secrets.zeroSSL -}}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: zerossl-eab-hmac-key
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-parameter-store
+    kind: ClusterSecretStore
+  target:
+    name: zerossl-eab-hmac-key
+    creationPolicy: Owner
+  data:
+  - secretKey: zerossl-eab-hmac-key
+    remoteRef:
+      key: /zerossl/eab_hmac_key
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: zerossl-eab-kid
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-parameter-store
+    kind: ClusterSecretStore
+  target:
+    name: zerossl-eab-kid
+    creationPolicy: Owner
+  data:
+  - secretKey: zerossl-eab-kid
+    remoteRef:
+      key: /zerossl/eab_kid
+{{- end }}
+```
+
+Additionally, I now have multiple secrets available in the templates folder for the kong proxies, but I want to only render those resources into the chart when needed. Therefore I added a bit more structure by moving the flags for rendering external secrets under a 'secrets' scope in the helm chart. That is why the entire resource definition is wrapped in: `{{- if .Values.secrets.zeroSSL -}}`. I also applied a similar change to the dataplane certificates secret, so now it too is enabled with a value in the `secret` scope, namely `.Values.secrets.clusterCert`
+
+After this additional template was available, and the template for the dataplane certificate was updated, the last update was to the values files for each deployment.
+
+The KIC controller doesn't need any secret for now, as these are only consumed by the data planes.
+
+In the KIC data plane deployment, I enable the flags to render both available external secrets:
+```
+secrets:
+  clusterCert: true
+  zeroSSL: true
+```
+
+In the konnect hybrid data plane deployment I am not yet going to use the ZeroSSL secrets, so we have only
+```
+secrets:
+  clusterCert: true
+```
+
+### Propagate Secrets to KIC-Managed Data Plane Environments
+
+Now that the secret is available, I need to ensure they are set as environment variables on the Data Planes themselves. This is because the Data Plane will be making the call to zerossl's acme endpoint. If I do not set these secrets as env variables, then the plugin config, which references env variables, will be rejected by those data planes.
+
+To do this, I put a new `kong.customEnv` into the values file for the KIC data plane deployments. Note, I'm including the redis password here too, (example usage further below).which was already added with external secrets in the previous post.
+
+The `customEnv` section of the Kong chart will take these defined values and add them as env variables available to the Kong pods deployed by the chart.
+
+```
+  customenv:
+    redis_password:
+      valuefrom:
+        secretkeyref:
+          name: redis-password
+          key: redis-password
+    zerossl_eab_hmac_key:
+      valuefrom:
+        secretkeyref:
+          name: zerossl-eab-hmac-key
+          key: zerossl-eab-hmac-key
+    zerossl_eab_kid:
+      valuefrom:
+        secretkeyref:
+          name: zerossl-eab-kid
+          key: zerossl-eab-kid
+```
+
+### Define ACME Plugin Resource
+
+These env variables being available to the Kong process will allow us to reference secrets from the `env vault` built into kong. This means we can tell the Control Plane "I am not going to give you this value, but rather give you a reference to something the data plane can look up". In this case, we will refer to the built in `env vault` which will pull values from environment variables on the data plane.
+
+For example, in the plugin configuration for the ACME provider credentials, I set the values to:
+```
+{vault://env/ZEROSSL_EAB_HMAC_KEY}
+{vault://env/ZEROSSL_EAB_KID}
+```
+
+The full plugin definition is here:
+```
+{{- if .Values.kong.ingressController.enabled -}}
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+plugin: acme
+metadata:
+  name: acme
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+config:
+  account_email: dave.erichsen@gmail.com
+  domains:
+    - kic.erichsen.dev
+  api_uri: https://acme.zerossl.com/v2/DV90
+  eab_hmac_key: "{vault://env/ZEROSSL_EAB_HMAC_KEY}"
+  eab_kid: "{vault://env/ZEROSSL_EAB_KID}"
+  storage: redis
+  storage_config:
+    redis:
+      auth: "{vault://env/REDIS_PASSWORD}"
+      database: 0
+      host: konnect-kic-dps-redis-master
+      namespace: ""
+      port: null
+      ssl: false
+      ssl_server_name: null
+      ssl_verify: false
+{{- end }}
+```
+
+
+### Removing Existing Certificates
+
+I had previously added a ZeroSSL-signed certificate manually as a kubernetes secret, and configured the ingress to use this certificate to terminate TLS connections. Now I'm able to remove that configuration in the `ingress` section of the echo service's values.yaml, shown below:
+
+```
+  tls:
+    - secretName: kic-erichsen-dev-tls
+      hosts:
+        - kic.erichsen.dev
+```
+
+When I applied this change, the Certificate and SNI entries disappeared from the Konnect view of the configuration -- neat!
+
+I also deleted the `kic-erichsen-dev-tls` secret that was previously used by the ingress.
+
+
+## Wrapping Up
+
+After applying everything, my first call to `kic.erichsen.dev` returned an SSL error. This is expected but triggers the ACME plugin to begin the request and verification process with ZeroSSL. Within a second or so, I see in the data plane logs that a certificate was vended for `kic.erichsen.dev`. I make a few calls quickly to ensure every data plane is able to access the certificate which was vended only once and then stored in the redis cache. The data plane logs confirm there are no additional ACME requests.
+
+### Next Steps
+- Use a Github Action to inject the IAM credentials into the Linode Kubernetes Cluster to remove last manually applied cluster secret.
+
+---
+
